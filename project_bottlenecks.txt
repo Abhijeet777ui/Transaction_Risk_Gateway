@@ -1,0 +1,20 @@
+# Transaction Risk Gateway - Project Bottlenecks & Problems Encountered
+
+1. Structural Risk Score Capping
+- **The Problem:** The combined risk score was utilizing a weighted average `(rules * 0.5) + (ml * 0.3) + (llm * 0.2)`. Even if the Deterministic Rules Layer flagged a transaction as maximally risky (1.0), the combined score would only reach 0.50. 
+- **The Bottleneck:** This made it structurally impossible to hit the `ESCALATE` threshold (0.65) unless multiple separate systems flagged the transaction simultaneously, dangerously dampening severe singular risks.
+- **Resolution:** Replaced the weighted average with a maximum-based formula: `min(1.0, max(rules_risk, ml_risk) + lm_risk)`.
+
+2. Floating Point Precision on Boundary Thresholds
+- **The Problem:** Boundary conditions evaluating expected thresholds fail due to Python float anomalies. For instance, risk additions of `0.15 + 0.30 + 0.20` resulted in `0.6499999999999999` rather than `0.65`.
+- **The Bottleneck:** The Engine makes deterministic decision paths using strict inequalities (`combined_risk < 0.65`). `0.649... < 0.65` evaluates to `True`, inadvertently downgrading an intended escalation into a lower severity `require_verification` outcome.
+- **Resolution:** (Pending) Needs an architectural decision on either applying `round(score, 2)`, using math tolerances (`isclose()`), or integer scaling (calculating scores out of 100 instead of 1.0).
+
+3. Failsafe "Floor" Interference
+- **The Problem:** The ML layer was designed to gracefully degrade by defaulting to `0.50` if unavailable or missing.
+- **The Bottleneck:** Under the old weighted average calculation, `0.50 * 0.3` immediately introduced a base floor of 0.15 risk. Depending on base configs, that arbitrary floor score would sometimes trigger validation checks artificially on completely safe user transactions.
+
+4. Environmental Testing Friction
+- **The Problem:** Global `pytest` access was unmapped in the current shell environment, causing test failures when attempting to natively execute `pytest tests/`.
+- **The Bottleneck:** Slowed down rapid testing workflows.
+- **Resolution:** Fell back to running tests natively via `python -m pytest` or manually testing scripts via base python.

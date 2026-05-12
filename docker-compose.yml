@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: gateway_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: gateway
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # app:
+  #   build: .
+  #   ports:
+  #     - "8000:8000"
+  #   depends_on:
+  #     - db
+  #   environment:
+  #     - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/gateway
+  #     - GEMINI_API_KEY=${GEMINI_API_KEY}
+
+volumes:
+  postgres_data:

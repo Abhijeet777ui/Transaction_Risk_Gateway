@@ -1,0 +1,11 @@
+transaction-risk-gateway/
+*.db
+*.sqlite
+*.sqlite3
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv
+env/
+venv/
