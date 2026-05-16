@@ -38,3 +38,11 @@
 9. The "Fat Row" Anti-Pattern (JSONB Growth)
 - **The Problem:** Up to 500 transaction records are stored inside a single JSONB column within the `users` table.
 - **The Bottleneck:** Whenever the user profile is queried or updated, the database must serialize, transfer, and deserialize massive JSON payloads. As users accumulate history, this bloats memory usage and significantly slows down database I/O.
+
+10. The "Silent Failure" Bug (Broad Exception Handling)
+- **The Problem:** The main `/evaluate` endpoint wraps the entire transaction processing logic in a broad `try/except Exception` block that returns a generic `ESCALATE_TO_HUMAN` response.
+- **The Bottleneck:** If the database crashes, or a syntax error occurs, the system catches the error and tells the frontend the transaction is under review. However, because the database failed, the transaction is never actually saved. This results in money/transactions being permanently lost while appearing successful to the user.
+
+11. Weak Input Validation Boundaries
+- **The Problem:** The Pydantic model (`TransactionRequest`) ensures basic types but lacks strict boundary validation for fields (e.g., maximum string lengths, strict ISO-8601 formatting, or max amount caps).
+- **The Bottleneck:** Malicious actors could pass massive JSON payloads, negative amounts (partially handled), or malformed timestamps that bypass the early Pydantic validation and cause deep backend crashes during Database inserts or Pandas processing.
