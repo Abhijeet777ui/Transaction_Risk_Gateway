@@ -2,6 +2,10 @@ from fastapi import FastAPI, HTTPException, Depends, Request
 import os
 import sys
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -12,18 +16,10 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from api.security import limiter, verify_api_key
 
-from layers.rules_layer import RulesLayer
-from layers.ml_layer import MLLayer
-from layers.lm_layer import LMLayer
-from decision_engine.engine import DecisionEngine
-from decision_engine.decision import Decision
-
-from audit.schema import AuditLog
-from audit.pg_logger import PGAuditLogger
-from user_profiles.pg_manager import PGUserProfileManager
-
-from database.connection import init_db, AsyncSessionLocal
 from api.models import TransactionRequest, TransactionResponse
+from decision_engine.decision import Decision
+from database.connection import init_db, AsyncSessionLocal
+from audit.schema import AuditLog
 
 app = FastAPI(title="Explainable Transaction Risk Gateway")
 app.state.limiter = limiter
@@ -43,19 +39,38 @@ metrics = {
 }
 
 # Initialize stateless core layers (no DB needed at construction time)
-rules_layer = RulesLayer(RULES)
-ml_layer = MLLayer('models/ml_model.pkl')
-lm_layer = LMLayer(LLM.get('PROVIDER', 'openai'))
-decision_engine = DecisionEngine(DECISION_ENGINE)
+# Global placeholders for lazy loading
+rules_layer = None
+ml_layer = None
+lm_layer = None
+decision_engine = None
+audit_logger = None
+user_manager = None
 
-# PostgreSQL-backed managers (stateless — session passed per-request)
-audit_logger = PGAuditLogger()
-user_manager = PGUserProfileManager()
+def get_layers():
+    global rules_layer, ml_layer, lm_layer, decision_engine, audit_logger, user_manager
+    if rules_layer is None:
+        from layers.rules_layer import RulesLayer
+        from layers.ml_layer import MLLayer
+        from layers.lm_layer import LMLayer
+        from decision_engine.engine import DecisionEngine
+        from audit.pg_logger import PGAuditLogger
+        from user_profiles.pg_manager import PGUserProfileManager
+        
+        rules_layer = RulesLayer(RULES)
+        ml_layer = MLLayer('models/ml_model.pkl')
+        lm_layer = LMLayer(LLM.get('PROVIDER', 'openai'))
+        decision_engine = DecisionEngine(DECISION_ENGINE)
+        audit_logger = PGAuditLogger()
+        user_manager = PGUserProfileManager()
+    return rules_layer, ml_layer, lm_layer, decision_engine, audit_logger, user_manager
 
 
 @app.on_event("startup")
 async def startup():
     """Create all tables on first run (idempotent)."""
+    from database.models import User
+    from audit.schema import AuditLog
     await init_db()
 
 
@@ -72,22 +87,25 @@ async def health():
 
 @app.post("/evaluate", response_model=TransactionResponse)
 @limiter.limit("100/minute")
-async def evaluate_transaction(req: Request, request: TransactionRequest, api_key: str = Depends(verify_api_key)):
+async def evaluate_transaction(request: Request, tx_req: TransactionRequest, api_key: str = Depends(verify_api_key)):
     metrics["total_requests"] += 1
 
     async with AsyncSessionLocal() as session:
         try:
             # Validate critical inputs
-            if request.amount <= 0:
+            if tx_req.amount <= 0:
                 raise HTTPException(status_code=400, detail="Amount must be positive")
 
+            # --- INITIALIZE LAYERS (Lazy) ---
+            rules_layer, ml_layer, lm_layer, decision_engine, audit_logger, user_manager = get_layers()
+
             # Get or create user profile
-            user_dict = await user_manager.get_user(session, request.user_id)
+            user_dict = await user_manager.get_user(session, tx_req.user_id)
             if not user_dict:
-                user_dict = await user_manager.create_user(session, request.user_id)
+                user_dict = await user_manager.create_user(session, tx_req.user_id)
 
             # Build transaction dictionary
-            transaction = request.model_dump()
+            transaction = tx_req.model_dump()
 
             # --- EXECUTE LAYERS ---
             rules_signal = rules_layer.evaluate(transaction, user_dict)
@@ -124,13 +142,13 @@ async def evaluate_transaction(req: Request, request: TransactionRequest, api_ke
 
             # --- AUDIT LOGGING ---
             try:
-                ts = datetime.fromisoformat(request.timestamp.replace('Z', '+00:00'))
+                ts = datetime.fromisoformat(tx_req.timestamp.replace('Z', '+00:00')).replace(tzinfo=None)
             except (ValueError, AttributeError):
                 ts = datetime.utcnow()
 
             audit_entry = AuditLog(
-                transaction_id=request.transaction_id,
-                user_id=request.user_id,
+                transaction_id=tx_req.transaction_id,
+                user_id=tx_req.user_id,
                 timestamp=ts,
                 transaction=transaction,
                 signals={'rules': rules_signal, 'ml': ml_signal, 'lm': lm_signal, 'fallbacks_used': fallbacks_used},
@@ -143,7 +161,7 @@ async def evaluate_transaction(req: Request, request: TransactionRequest, api_ke
 
             # --- PROFILE UPDATES ---
             if decision_str != 'lock_account':
-                await user_manager.record_transaction(session, request.user_id, transaction, decision_str)
+                await user_manager.record_transaction(session, tx_req.user_id, transaction, decision_str)
 
             # Session commits automatically on exit via get_db context (explicit here)
             await session.commit()

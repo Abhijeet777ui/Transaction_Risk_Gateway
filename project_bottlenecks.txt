@@ -18,3 +18,23 @@
 - **The Problem:** Global `pytest` access was unmapped in the current shell environment, causing test failures when attempting to natively execute `pytest tests/`.
 - **The Bottleneck:** Slowed down rapid testing workflows.
 - **Resolution:** Fell back to running tests natively via `python -m pytest` or manually testing scripts via base python.
+
+5. The Cold Start Problem
+- **The Problem:** The deterministic rules engine penalizes brand new accounts (+0.25), new recipients (+0.30), and new countries (+0.20).
+- **The Bottleneck:** Because a first-time user's first transaction inherently triggers all three, every single new user starts with a 0.75 risk score and is instantly escalated, blocking all legitimate first-day usage.
+
+6. Synchronous Execution Blocking the Async Event Loop
+- **The Problem:** The `ml_layer.evaluate()` and `rules_layer.evaluate()` functions perform CPU-bound operations synchronously.
+- **The Bottleneck:** Because FastAPI operates on a single-threaded async event loop, executing heavy computations synchronously forces all other incoming HTTP requests to wait, crippling the gateway's throughput.
+
+7. Database Race Conditions (Lost Updates)
+- **The Problem:** When recording a transaction, the system fetches the user's JSONB `transaction_history` array, appends the new transaction in Python, and saves the array back to PostgreSQL.
+- **The Bottleneck:** If a user makes two rapid transactions concurrently, both requests fetch the same historical array before either saves. One request will overwrite the other, silently deleting transaction history.
+
+8. External LLM Latency
+- **The Problem:** The gateway pauses the entire transaction evaluation to wait for a semantic behavioral analysis from Google Gemini.
+- **The Bottleneck:** External API calls to LLMs can take 1 to 5 seconds. In a payment processing environment, a multi-second latency per transaction degrades user experience and exhausts active connection pools under load.
+
+9. The "Fat Row" Anti-Pattern (JSONB Growth)
+- **The Problem:** Up to 500 transaction records are stored inside a single JSONB column within the `users` table.
+- **The Bottleneck:** Whenever the user profile is queried or updated, the database must serialize, transfer, and deserialize massive JSON payloads. As users accumulate history, this bloats memory usage and significantly slows down database I/O.

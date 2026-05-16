@@ -1,6 +1,6 @@
 import pickle
 import os
-import numpy as np
+import sys
 from typing import Dict, Any
 
 class MLLayer:
@@ -22,10 +22,24 @@ class MLLayer:
         if not os.path.exists(self.full_path):
             print(f"Warning: ML model not found at {self.full_path}")
             return None
-        with open(self.full_path, 'rb') as f:
-            return pickle.load(f)
+        try:
+            import numpy as np
+            # Compatibility bridge
+            if not hasattr(np, "_core"):
+                import numpy.core as core
+                sys.modules["numpy._core"] = core
+                if hasattr(core, "numeric"):
+                    sys.modules["numpy._core.numeric"] = core.numeric
+
+            with open(self.full_path, 'rb') as f:
+                return pickle.load(f)
+        except Exception as e:
+            print(f"ML Model Load Error: {e}")
+            print("Falling back to neutral signal (Safe Mode)")
+            return None
             
     def _engineer_features(self, transaction: Dict[str, Any], user: Dict[str, Any]) -> list:
+        import numpy as np
         # Amount Z-score (mocked based roughly on historical median if exact stats missing)
         amount = transaction.get('amount', 0)
         history = user.get('transaction_history', [])
@@ -52,6 +66,7 @@ class MLLayer:
         """
         Evaluate transaction using LR model, strictly bounded and falling back safely.
         """
+        import numpy as np
         if self.model is None:
              return {
                  'anomaly_score': None,
